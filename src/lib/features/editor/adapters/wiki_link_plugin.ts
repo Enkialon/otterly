@@ -5,6 +5,7 @@ import type {
   Node as ProseNode,
   Mark,
 } from "@milkdown/kit/prose/model";
+import type { EditorView } from "@milkdown/kit/prose/view";
 import { linkSchema } from "@milkdown/kit/preset/commonmark";
 import { format_wiki_display } from "$lib/features/editor/domain/wiki_link";
 import { dirty_state_plugin_key } from "./dirty_state_plugin";
@@ -306,36 +307,58 @@ export function create_wiki_link_click_prose_plugin(input: {
     return anchor.getAttribute("href");
   }
 
+  function handle_link_click(view: EditorView | null, event: MouseEvent) {
+    if (event.defaultPrevented) return false;
+    if (event.button !== 0) return false;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      return false;
+
+    const href = anchor_href_from_event(event);
+    if (typeof href !== "string") return false;
+
+    event.preventDefault();
+
+    if (is_external_url(href)) {
+      input.on_external_link_click(href);
+      return true;
+    }
+
+    const raw_path = parse_internal_href(href);
+    if (!raw_path) return true;
+
+    const editor_state = view?.state;
+    const ctx_state = editor_state
+      ? editor_context_plugin_key.getState(editor_state)
+      : null;
+    const base = ctx_state?.note_path ?? input.base_note_path ?? "";
+    input.on_internal_link_click(raw_path, base);
+
+    return true;
+  }
+
   return new Plugin({
     key: new PluginKey("wiki-link-click"),
+    view(editor_view) {
+      const handle_capture_click = (event: MouseEvent) => {
+        handle_link_click(editor_view, event);
+      };
+
+      editor_view.dom.addEventListener("click", handle_capture_click, true);
+
+      return {
+        destroy() {
+          editor_view.dom.removeEventListener(
+            "click",
+            handle_capture_click,
+            true,
+          );
+        },
+      };
+    },
     props: {
       handleDOMEvents: {
         click: (view, event) => {
-          if (event.button !== 0) return false;
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-            return false;
-
-          const href = anchor_href_from_event(event);
-          if (typeof href !== "string") return false;
-
-          event.preventDefault();
-
-          if (is_external_url(href)) {
-            input.on_external_link_click(href);
-            return true;
-          }
-
-          const raw_path = parse_internal_href(href);
-          if (!raw_path) return true;
-
-          const editor_state = view?.state;
-          const ctx_state = editor_state
-            ? editor_context_plugin_key.getState(editor_state)
-            : null;
-          const base = ctx_state?.note_path ?? input.base_note_path ?? "";
-          input.on_internal_link_click(raw_path, base);
-
-          return true;
+          return handle_link_click(view, event);
         },
       },
     },

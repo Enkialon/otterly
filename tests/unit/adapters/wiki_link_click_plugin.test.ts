@@ -36,16 +36,20 @@ function create_mouse_event(
   href: string | null,
   overrides?: Partial<MouseEvent>,
 ) {
-  const prevent_default = vi.fn();
+  let event: MouseEvent;
+  const prevent_default = vi.fn(() => {
+    Object.assign(event, { defaultPrevented: true });
+  });
   const stop_propagation = vi.fn();
   const target = href ? new MockAnchorElement(href) : null;
 
-  const event = {
+  event = {
     button: 0,
     metaKey: false,
     ctrlKey: false,
     shiftKey: false,
     altKey: false,
+    defaultPrevented: false,
     target,
     preventDefault: prevent_default,
     stopPropagation: stop_propagation,
@@ -78,6 +82,65 @@ describe("create_wiki_link_click_prose_plugin", () => {
   }
 
   describe("internal link passthrough", () => {
+    it("intercepts links during capture before browser navigation", () => {
+      const { plugin, on_internal_link_click } = setup();
+      const listeners = new Map<string, EventListener>();
+      const dom = {
+        addEventListener: vi.fn(
+          (name: string, listener: EventListener) =>
+            listeners.set(name, listener),
+        ),
+        removeEventListener: vi.fn(),
+      };
+      const plugin_view = plugin.spec.view?.({ dom } as never);
+      const { event, prevent_default } = create_mouse_event("new-note.md");
+
+      listeners.get("click")?.(event);
+
+      expect(dom.addEventListener).toHaveBeenCalledWith(
+        "click",
+        expect.any(Function),
+        true,
+      );
+      expect(prevent_default).toHaveBeenCalledOnce();
+      expect(on_internal_link_click).toHaveBeenCalledWith(
+        "new-note.md",
+        "folder/current.md",
+      );
+
+      invoke_dom_click(plugin, event);
+
+      expect(on_internal_link_click).toHaveBeenCalledOnce();
+      plugin_view?.destroy?.();
+      expect(dom.removeEventListener).toHaveBeenCalledWith(
+        "click",
+        expect.any(Function),
+        true,
+      );
+    });
+
+    it("preserves modified clicks during capture", () => {
+      const { plugin, on_internal_link_click } = setup();
+      const listeners = new Map<string, EventListener>();
+      const dom = {
+        addEventListener: vi.fn(
+          (name: string, listener: EventListener) =>
+            listeners.set(name, listener),
+        ),
+        removeEventListener: vi.fn(),
+      };
+      const plugin_view = plugin.spec.view?.({ dom } as never);
+      const { event, prevent_default } = create_mouse_event("note.md", {
+        ctrlKey: true,
+      });
+
+      listeners.get("click")?.(event);
+
+      expect(prevent_default).not.toHaveBeenCalled();
+      expect(on_internal_link_click).not.toHaveBeenCalled();
+      plugin_view?.destroy?.();
+    });
+
     it("passes raw href and base note path for bare .md href", () => {
       const { plugin, on_internal_link_click } = setup();
       const { event, prevent_default } = create_mouse_event("note.md");
